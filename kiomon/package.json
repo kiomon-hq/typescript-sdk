@@ -8,11 +8,11 @@
   "homepage": "https://kiomon.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kiomonai/typescript-sdk.git",
+    "url": "git+https://github.com/kiomon-hq/typescript-sdk.git",
     "directory": "kiomon"
   },
   "bugs": {
-    "url": "https://github.com/kiomonai/typescript-sdk/issues"
+    "url": "https://github.com/kiomon-hq/typescript-sdk/issues"
   },
   "type": "module",
   "main": "./index.js",
