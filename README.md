@@ -1,6 +1,6 @@
 # Kiomon TypeScript SDK
 
-[![CI](https://github.com/kiomon-hq/typescript-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/kiomon-hq/typescript-sdk/actions/workflows/ci.yml)
+[![CI](https://github.com/kiomonai/typescript-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/kiomonai/typescript-sdk/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The Kiomon SDK for JavaScript and TypeScript — persistent memory for AI agents and apps.
