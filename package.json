@@ -1,0 +1,27 @@
+{
+  "name": "kiomon-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Kiomon TypeScript SDK — the @kiomon/kiomon implementation and its unscoped kiomon alias.",
+  "license": "MIT",
+  "author": "Kiomon",
+  "homepage": "https://kiomon.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kiomon-hq/typescript-sdk.git"
+  },
+  "type": "module",
+  "workspaces": [
+    "sdk",
+    "kiomon"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @kiomon/kiomon",
+    "typecheck": "npm run typecheck --workspace @kiomon/kiomon",
+    "test": "npm test --workspace @kiomon/kiomon",
+    "check": "npm run typecheck && npm test && npm run build"
+  }
+}

@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
+
+# Package manager caches
+.npm/
+.yarn/
+.pnpm-store/

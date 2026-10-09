@@ -1,0 +1,47 @@
+{
+  "name": "kiomon",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Kiomon SDK — persistent memory for AI agents and apps. Unscoped alias of @kiomon/kiomon.",
+  "license": "MIT",
+  "author": "Kiomon",
+  "homepage": "https://kiomon.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kiomon-hq/typescript-sdk.git",
+    "directory": "kiomon"
+  },
+  "bugs": {
+    "url": "https://github.com/kiomon-hq/typescript-sdk/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "kiomon",
+    "memory",
+    "ai",
+    "agents",
+    "mcp",
+    "rag",
+    "context"
+  ],
+  "dependencies": {
+    "@kiomon/kiomon": "^0.1.0"
+  }
+}
