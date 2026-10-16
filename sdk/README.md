@@ -80,6 +80,64 @@ Writes go through the same **write gate** as the dashboard: a high-confidence
 learning may activate immediately, anything uncertain lands in the Review Inbox
 rather than silently becoming knowledge.
 
+## Workspace and document verbs
+
+Four more verbs have no MCP equivalent. They exist because the twelve above are not
+self-sufficient: without them a caller cannot make the workspace `selectWorkspace`
+needs, or put anything in it for `searchMemory` to find.
+
+| Method | What it does |
+|---|---|
+| `createWorkspace({ name, org_id? })` | Create a workspace, optionally inside an organization |
+| `ingestDocument({ body, title?, … })` | Save a document — the write path for source material |
+| `listDocuments({ query?, kind?, … })` | List documents, newest first |
+| `deleteDocument(id)` | Delete a document and everything derived from it |
+
+```ts
+import { Kiomon } from "@kiomon/kiomon";
+
+const kiomon = new Kiomon({ apiKey });
+
+// 1. Make a workspace inside your organization.
+const { workspaces } = await kiomon.listWorkspaces();
+const ws = await kiomon.createWorkspace({ name: "Research", org_id: workspaces[0]!.org_id! });
+kiomon.selectWorkspace(ws.id);
+
+// 2. Put something in it. Indexing is asynchronous, so this resolves before the
+//    document is searchable — give it a few seconds.
+await kiomon.ingestDocument({
+  body: "# Deploy runbook\n\nRoll back with `wrangler rollback <version>`.",
+  title: "Deploy runbook",
+  source_url: "https://internal.example/runbooks/deploy",
+  tags: ["runbook", "deploy"],
+  kind: "procedural",
+});
+
+// 3. Find it.
+for (const hit of (await kiomon.searchMemory({ query: "how do we roll back?" })).results) {
+  console.log(hit.title, hit.rank);
+}
+```
+
+### Two behaviours worth knowing before you rely on them
+
+**Dedup is by `source_url` only.** Re-saving the same URL resolves with
+`duplicate: true` and the **existing** id rather than rejecting. A save with no
+`source_url` is given a synthetic unique one, so it *never* dedups — repeats pile up as
+separate documents. Pass `source_url` if you want the second save to be a no-op.
+
+**`listDocuments` shows only indexed documents by default.** A document you just saved
+is `queued` and therefore absent from the list until it finishes chunking. Pass
+`index_status: "all"` to see the pipeline rather than just its output — that is also the
+only way to find a save that failed, because a `failed` row is invisible to the default
+filter forever.
+
+```ts
+await kiomon.listDocuments();                        // findable only (chunked / indexed / ready)
+await kiomon.listDocuments({ index_status: "all" });  // include queued and failed
+await kiomon.listDocuments({ index_status: "failed" }); // just the failures
+```
+
 ## Workspaces
 
 Pass `workspaceId` to the constructor, or rely on resolution: exactly one workspace
@@ -89,6 +147,9 @@ memory into the wrong brain is worse than failing.
 ```ts
 const kiomon = new Kiomon({ apiKey }).selectWorkspace("ws_…");
 ```
+
+If the account has none yet, `createWorkspace()` makes one — you do not need to leave
+the SDK for the dashboard.
 
 ## Errors
 

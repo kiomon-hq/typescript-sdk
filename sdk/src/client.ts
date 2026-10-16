@@ -6,6 +6,13 @@
  * relearning anything. Every verb maps onto an existing
  * REST endpoint; the SDK adds typing, retries, idempotency and error codes.
  *
+ * Four further verbs — {@link Kiomon.createWorkspace},
+ * {@link Kiomon.ingestDocument}, {@link Kiomon.listDocuments} and
+ * {@link Kiomon.deleteDocument} — exist because the memory verbs alone are not
+ * self-sufficient: without them a caller cannot make the workspace
+ * `selectWorkspace` needs, or put anything in it for `searchMemory` to find.
+ * They are SDK-only; the MCP toolset has no equivalent.
+ *
  * Failure contract: an invalid *argument* throws synchronously, so a programming
  * error never gets buried in a promise chain. Everything that can fail for
  * *remote* reasons — auth, quota, transport, a 5xx — rejects with a
@@ -16,9 +23,15 @@ import type {
 	BatchDraftResult,
 	CallOptions,
 	ContextPacket,
+	CreateWorkspaceArgs,
+	DeleteResult,
+	DocumentList,
 	GraphExploreArgs,
 	GraphResult,
+	IngestDocumentArgs,
+	IngestResult,
 	JsonObject,
+	ListDocumentsArgs,
 	ManageAction,
 	ManageMemoryArgs,
 	MemoryDocument,
@@ -32,12 +45,20 @@ import type {
 	Workspace,
 	WorkspaceContext,
 } from "./types.js";
+import { USER_AGENT } from "./version.js";
 
 const DEFAULT_BASE_URL = "https://api.kiomon.com";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 2;
 const MAX_LEARNINGS_PER_CALL = 25;
 const MAX_RETRIEVAL_LIMIT = 20;
+/** The API caps a document page at 200 rows. */
+const MAX_DOCUMENT_LIMIT = 200;
+
+const MEMORY_KINDS: readonly MemoryKind[] = ["reference", "episodic", "semantic", "procedural"];
+const DOCUMENT_STATUSES = ["all", "active", "archived", "pending_approval"] as const;
+const DOCUMENT_SORTS = ["recent", "oldest", "recently_read"] as const;
+const INDEX_STATUSES = ["all", "queued", "chunked", "indexed", "ready", "failed"] as const;
 
 const LEARNINGS_KINDS: readonly ReflectLearning["kind"][] = ["semantic", "procedural", "episodic"];
 const MANAGE_ACTIONS: readonly ManageAction[] = [
@@ -276,6 +297,164 @@ export class Kiomon {
 		return this.request<{ workspaces: Workspace[] }>("/api/workspaces", {}, options);
 	}
 
+	// ── Workspace and document verbs ───────────────────────────────────────────
+	//
+	// SDK-only: the MCP toolset has no equivalent, and without these the memory
+	// verbs cannot be used from a cold start — a caller could not create the
+	// workspace `selectWorkspace` needs, nor put anything in it for
+	// `searchMemory` to find.
+
+	/**
+	 * Create a workspace, optionally inside an organization.
+	 *
+	 * Omit `org_id` to file it under the caller's primary organization; pass one
+	 * to place it in a specific org, where the caller must be an admin or owner or
+	 * the API answers 403. Returns the bare workspace row — the enriched fields
+	 * (`documents`, `my_role`, `is_default`) come from `listWorkspaces`, not from
+	 * this call.
+	 *
+	 * The plan's workspace ceiling applies: a Free organization over its limit
+	 * gets 402 `quota_exceeded`, not a silent no-op.
+	 */
+	createWorkspace(args: CreateWorkspaceArgs, options?: CallOptions): Promise<Workspace> {
+		if (!args?.name?.trim()) {
+			throw new KiomonError("createWorkspace requires a non-empty `name`.", { code: "invalid_request" });
+		}
+		if (args.org_id !== undefined && !args.org_id?.trim()) {
+			throw new KiomonError("createWorkspace: `org_id` must be a non-empty string.", {
+				code: "invalid_request",
+			});
+		}
+		return this.request<Workspace>(
+			"/api/workspaces",
+			{
+				method: "POST",
+				body: args.org_id === undefined ? { name: args.name } : { name: args.name, org_id: args.org_id },
+				write: true,
+			},
+			options,
+		);
+	}
+
+	/**
+	 * Save a document — the write path for source material.
+	 *
+	 * Distinct from `draftMemory`: a learning goes through the write gate and may
+	 * land in the Review Inbox, while a document is stored and indexed directly.
+	 * Documents are what `searchMemory` returns.
+	 *
+	 * Indexing is asynchronous, so the row is not searchable when this resolves.
+	 * Expect a lag — seconds, not instant — before the id shows up in a search.
+	 *
+	 * Dedup is by `source_url` **only**. Re-saving the same URL resolves with
+	 * `duplicate: true` and the **existing** id rather than rejecting — but a
+	 * save with no `source_url` is given a synthetic unique one, so it never
+	 * dedups and repeats will pile up as separate documents. Pass `source_url` if
+	 * you want the second save to be a no-op.
+	 */
+	ingestDocument(args: IngestDocumentArgs, options?: CallOptions): Promise<IngestResult> {
+		if (!args?.body?.trim()) {
+			throw new KiomonError("ingestDocument requires a non-empty `body`.", { code: "invalid_request" });
+		}
+		if (args.kind !== undefined && !MEMORY_KINDS.includes(args.kind)) {
+			throw new KiomonError(`ingestDocument: \`kind\` must be one of: ${MEMORY_KINDS.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.tags !== undefined && (!Array.isArray(args.tags) || args.tags.some((t) => typeof t !== "string"))) {
+			throw new KiomonError("ingestDocument: `tags` must be an array of strings.", {
+				code: "invalid_request",
+			});
+		}
+		return this.request<IngestResult>(
+			"/api/documents",
+			{
+				method: "POST",
+				body: { ...args, workspace_id: this.workspaceFor(args.workspace_id) },
+				write: true,
+			},
+			options,
+		);
+	}
+
+	/**
+	 * List documents, newest first by default.
+	 *
+	 * Metadata only — the body is not in the projection, so read it with
+	 * `getMemory` when you need it. `counts` reports the per-kind totals for the
+	 * current filter over the whole match set, not just the page.
+	 *
+	 * **Only indexed documents are listed by default.** `queued` and `failed`
+	 * rows are hidden, so a document you just saved is absent until it finishes
+	 * chunking — pass `index_status: "all"` to see the pipeline rather than just
+	 * its output. That is also the way to find a save that failed: it is
+	 * invisible to the default filter forever.
+	 */
+	listDocuments(args: ListDocumentsArgs = {}, options?: CallOptions): Promise<DocumentList> {
+		if (args.limit !== undefined && (args.limit < 1 || args.limit > MAX_DOCUMENT_LIMIT)) {
+			throw new KiomonError(`listDocuments: \`limit\` must be between 1 and ${MAX_DOCUMENT_LIMIT}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.offset !== undefined && args.offset < 0) {
+			throw new KiomonError("listDocuments: `offset` must be a non-negative integer.", {
+				code: "invalid_request",
+			});
+		}
+		if (args.status !== undefined && !DOCUMENT_STATUSES.includes(args.status)) {
+			throw new KiomonError(`listDocuments: \`status\` must be one of: ${DOCUMENT_STATUSES.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.sort !== undefined && !DOCUMENT_SORTS.includes(args.sort)) {
+			throw new KiomonError(`listDocuments: \`sort\` must be one of: ${DOCUMENT_SORTS.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.kind !== undefined && !MEMORY_KINDS.includes(args.kind)) {
+			throw new KiomonError(`listDocuments: \`kind\` must be one of: ${MEMORY_KINDS.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.index_status !== undefined && !INDEX_STATUSES.includes(args.index_status)) {
+			throw new KiomonError(
+				`listDocuments: \`index_status\` must be one of: ${INDEX_STATUSES.join(", ")}.`,
+				{ code: "invalid_request" },
+			);
+		}
+		return this.request<DocumentList>(
+			"/api/documents",
+			{
+				query: {
+					limit: args.limit,
+					offset: args.offset,
+					q: args.query,
+					kind: args.kind,
+					tag: args.tag,
+					status: args.status,
+					source: args.source,
+					sort: args.sort,
+					since: args.since,
+					index_status: args.index_status,
+					workspace_id: this.workspaceFor(args.workspace_id),
+				},
+			},
+			options,
+		);
+	}
+
+	/**
+	 * Delete a document and everything derived from it.
+	 *
+	 * The row, its blob, its chunks, tags, links and both chunk- and
+	 * document-level vectors. Irreversible — prefer `archive` via `manageMemory`
+	 * when the intent is to hide rather than remove.
+	 */
+	deleteDocument(id: string, options?: CallOptions): Promise<DeleteResult> {
+		requireId(id, "deleteDocument");
+		return this.request<DeleteResult>(`/api/documents/${encodeURIComponent(id)}`, { method: "DELETE", write: true }, options);
+	}
+
 	/** The most recent proactive briefing for a workspace. */
 	getLatestBriefing(
 		args: { workspace_id?: string } = {},
@@ -374,7 +553,7 @@ export class Kiomon {
 
 		const { workspaces } = await this.listWorkspaces();
 		if (workspaces.length === 0) {
-			throw new KiomonError("This account has no workspaces yet. Create one in the Kiomon dashboard.", {
+			throw new KiomonError("This account has no workspaces yet. Call createWorkspace() to make one.", {
 				code: "not_found",
 			});
 		}
@@ -419,6 +598,7 @@ export class Kiomon {
 
 		const headers: Record<string, string> = {
 			Accept: "application/json",
+			"User-Agent": USER_AGENT,
 			"X-Agent-Id": this.agentId,
 			...this.extraHeaders,
 			...(await this.authHeader()),

@@ -24,15 +24,27 @@ export { Kiomon } from "./client.js";
 export type { KiomonOptions } from "./client.js";
 export { KiomonError, isKiomonError, codeForStatus } from "./errors.js";
 export type { KiomonErrorCode, KiomonErrorOptions } from "./errors.js";
+export { SDK_VERSION, USER_AGENT } from "./version.js";
 export type {
 	BatchDraftResult,
 	CallOptions,
 	ConflictNote,
 	ContextPacket,
+	CreateWorkspaceArgs,
+	DeleteResult,
+	DocumentCounts,
+	DocumentListItem,
+	DocumentList,
+	DocumentSort,
+	DocumentStatus,
 	EvidenceRef,
 	GraphExploreArgs,
 	GraphResult,
+	IndexStatus,
+	IngestDocumentArgs,
+	IngestResult,
 	JsonObject,
+	ListDocumentsArgs,
 	ManageAction,
 	ManageMemoryArgs,
 	MemoryDocument,
