@@ -56,42 +56,56 @@ const kiomon = new Kiomon({ token: async () => await getKiomonTokenFor(user) });
 > worker's default-deny allowlist to the memory routes. `request()` is not a
 > general escape hatch in that mode.
 
-## The 12 verbs
+## The 14 verbs
 
-The SDK mirrors Kiomon's hosted MCP toolset method for method, so a capability you
-have in an agent you also have here.
+The SDK mirrors Kiomon's hosted MCP toolset tool for tool, so a capability you
+have in an agent you also have here. The MCP column is the tool that does the
+same thing on the server side.
 
-| Method | What it does |
-|---|---|
-| `retrieveMemory({ intent, query, … })` | Intent-aware context packet with provenance, conflicts and warnings |
-| `searchMemory({ query, kind?, limit? })` | Hybrid keyword + semantic search |
-| `getMemory(id)` | One memory by id |
-| `getWorkspaceContext({ topic? })` | Orientation pack — "where was I" |
-| `getLatestBriefing()` | The most recent proactive briefing |
-| `reflectSession({ learnings })` | Save up to 25 learnings through the autonomous write gate |
-| `draftMemory(learning)` | Save one learning |
-| `manageMemory({ id, action, value? })` | `pin` · `unpin` · `archive` · `restore` · `forget` · `rate` · `approve` · `reject` · `revert` |
-| `exploreMemoryGraph({ id, relation?, depth? })` | Multi-hop traversal of the memory graph |
-| `recordOutcome({ outcome, items })` | Report whether retrieved memories helped |
-| `listWorkspaces()` | Every workspace this credential can reach |
-| `selectWorkspace(id)` | Bind the client to a workspace (chainable) |
+| Method | MCP tool | What it does |
+|---|---|---|
+| `retrieveMemory({ intent, query, … })` | `retrieve_memory` | Intent-aware context packet with provenance, conflicts and warnings |
+| `searchMemory({ query, kind?, limit? })` | `search_memory` | Hybrid keyword + semantic search |
+| `getMemory(id)` | `get_memory` | One memory by id |
+| `listMemories({ status?, kind?, query? … })` | `list_memories` | List by state — the Review Inbox by default |
+| `ingestDocument({ body, title?, … })` | `save_document` | Save source material as a File |
+| `getWorkspaceContext({ topic? })` | `get_workspace_context` | Orientation pack — "where was I" |
+| `getLatestBriefing()` | `get_latest_briefing` | The most recent proactive briefing |
+| `reflectSession({ learnings })` | `reflect_session` | Save up to 25 learnings through the autonomous write gate |
+| `draftMemory(learning)` | `draft_memory` | Save one learning |
+| `manageMemory({ id, action, value? })` | `manage_memory` | `pin` · `unpin` · `archive` · `restore` · `forget` · `rate` · `approve` · `reject` · `revert` |
+| `exploreMemoryGraph({ id, relation?, depth? })` | `explore_memory_graph` | Multi-hop traversal of the memory graph |
+| `recordOutcome({ outcome, items })` | `record_outcome` | Report whether retrieved memories helped |
+| `listWorkspaces()` | `list_workspaces` | Every workspace this credential can reach |
+| `selectWorkspace(id)` | `select_workspace` | Bind the client to a workspace (chainable) |
 
 Writes go through the same **write gate** as the dashboard: a high-confidence
 learning may activate immediately, anything uncertain lands in the Review Inbox
-rather than silently becoming knowledge.
+rather than silently becoming knowledge. Nothing in the inbox is retrievable —
+which is what `listMemories()` is for.
 
-## Workspace and document verbs
+```ts
+// Work the inbox a write gate fills. `status` defaults to pending_approval.
+const inbox = await kiomon.listMemories({ kind: "semantic", limit: 20 });
+for (const draft of inbox.memories) {
+  console.log(draft.title, draft.confidence, draft.excerpt);
+}
+if (inbox.total > inbox.memories.length) await kiomon.listMemories({ offset: 20 });
 
-Four more verbs have no MCP equivalent. They exist because the twelve above are not
-self-sufficient: without them a caller cannot make the workspace `selectWorkspace`
-needs, or put anything in it for `searchMemory` to find.
+await kiomon.manageMemory({ id: inbox.memories[0]!.id, action: "approve" });
+```
+
+## Three more verbs
+
+These have no tool of their own. Without them the fourteen above are not
+self-sufficient: a caller cannot make the workspace `selectWorkspace` needs, or
+read the library with the document-only filters.
 
 | Method | What it does |
 |---|---|
 | `createWorkspace({ name, org_id? })` | Create a workspace, optionally inside an organization |
-| `ingestDocument({ body, title?, … })` | Save a document — the write path for source material |
-| `listDocuments({ query?, kind?, … })` | List documents, newest first |
-| `deleteDocument(id)` | Delete a document and everything derived from it |
+| `listDocuments({ query?, kind?, tag?, … })` | List documents with tag, source, sort and pipeline-state filters |
+| `deleteDocument(id)` | Delete a document and everything derived from it (the `forget` action, with a typed result) |
 
 ```ts
 import { Kiomon } from "@kiomon/kiomon";
@@ -115,13 +129,13 @@ await kiomon.ingestDocument({
 
 // 3. Find it.
 for (const hit of (await kiomon.searchMemory({ query: "how do we roll back?" })).results) {
-  console.log(hit.title, hit.rank);
+  console.log(hit.title, hit.snippet);
 }
 ```
 
 ### Two behaviours worth knowing before you rely on them
 
-**Dedup is by `source_url` only.** Re-saving the same URL resolves with
+**Dedup is by `source_url` within a workspace.** Re-saving the same URL resolves with
 `duplicate: true` and the **existing** id rather than rejecting. A save with no
 `source_url` is given a synthetic unique one, so it *never* dedups — repeats pile up as
 separate documents. Pass `source_url` if you want the second save to be a no-op.
@@ -165,7 +179,7 @@ try {
     case "quota_exceeded": // HTTP 402 on Free
       return showUpgrade(error.needsUpgrade);
     case "rate_limited":
-    case "server_error":
+    case "service_unavailable":
       return retryLater(); // error.retryable === true
     case "not_found": // may mean "no access" — the API fails closed with 404
       return handleMissing();
