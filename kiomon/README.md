@@ -11,8 +11,8 @@ npm install kiomon
 import { Kiomon } from "kiomon";
 ```
 
-Everything documented in [`@kiomon/kiomon`](../sdk/README.md) applies unchanged: the same 12
-memory-native verbs, typed errors, retries and idempotent writes, zero runtime dependencies.
+Everything documented in [`@kiomon/kiomon`](../sdk/README.md) applies unchanged: the same 14
+memory and document verbs, typed errors, retries and idempotent writes, zero runtime dependencies.
 
 ## Why two packages exist
 

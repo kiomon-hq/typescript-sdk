@@ -308,11 +308,16 @@ export interface GraphExploreArgs {
 	id: string;
 	relation?: string;
 	depth?: number;
+	/** The graph is workspace-scoped; defaults to the client's workspace. */
+	workspace_id?: string;
 }
+
+/** How a retrieved memory performed. The server accepts exactly these four. */
+export type OutcomeAssessment = "helpful" | "unused" | "misleading" | "outdated";
 
 export interface RecordOutcomeArgs {
 	outcome: "success" | "failure";
-	items: { memory_id: string; assessment: string }[];
+	items: { memory_id: string; assessment: OutcomeAssessment }[];
 	workspace_id?: string;
 }
 
@@ -389,7 +394,13 @@ export interface ListDocumentsArgs {
 	workspace_id?: string;
 }
 
-/** Per-kind totals for the current filter, computed over the whole match set. */
+/**
+ * Per-kind totals for the current filter.
+ *
+ * The API computes these on the first page only, to save a query on every
+ * subsequent page: with `offset > 0` every field comes back `0`, not the real
+ * totals. `total` on the enclosing list is always correct.
+ */
 export interface DocumentCounts {
 	total: number;
 	reference: number;
@@ -457,9 +468,10 @@ export interface DocumentList {
  * The outcome of `ingestDocument`.
  *
  * A save the API already had answers `200` with `duplicate: true` and the
- * **existing** `id` instead of `201` — dedup is by source URL and body hash, so
- * re-ingesting the same page is a no-op rather than an error. Check `duplicate`
- * before treating the id as new.
+ * **existing** `id` instead of `201`. Dedup is by source URL **within a
+ * workspace**, so re-ingesting the same page is a no-op rather than an error;
+ * a save with no `source_url` is given a synthetic unique one and never dedups.
+ * Check `duplicate` before treating the id as new.
  */
 export interface IngestResult {
 	id: string;
@@ -474,4 +486,54 @@ export interface IngestResult {
 /** The outcome of `deleteDocument`. */
 export interface DeleteResult {
 	deleted: boolean;
+}
+
+/**
+ * The state a listing selects. The same vocabulary filters documents and
+ * memories, so it is one type rather than two that must agree.
+ */
+export type MemoryStatus = DocumentStatus;
+
+/** Arguments for `listMemories`. */
+export interface ListMemoriesArgs {
+	/** Defaults to `"pending_approval"` — the Review Inbox. */
+	status?: MemoryStatus;
+	kind?: MemoryKind;
+	/** Text filter over title and body. */
+	query?: string;
+	/** Page size, 1–200. Defaults to 50. */
+	limit?: number;
+	offset?: number;
+	workspace_id?: string;
+}
+
+/**
+ * One row of the memory listing — the card shape, not the full document.
+ *
+ * The body is absent by design (read it with `getMemory`), and `tags` arrives as
+ * a JSON string, as it does everywhere else on the wire.
+ */
+export interface MemorySummary {
+	id: string;
+	title: string | null;
+	excerpt: string | null;
+	kind: MemoryKind;
+	status: string;
+	pinned: number;
+	tags: string | null;
+	source: string;
+	source_url: string;
+	workspace_id: string;
+	created_at: string;
+	confidence: number | null;
+	memory_metadata: string | null;
+}
+
+/** One page of memories. `status` is echoed back, since it defaulted. */
+export interface MemoryList {
+	memories: MemorySummary[];
+	status: MemoryStatus;
+	limit: number;
+	offset: number;
+	total: number;
 }

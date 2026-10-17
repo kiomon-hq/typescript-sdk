@@ -1,17 +1,17 @@
 /**
  * Kiomon SDK — client
  *
- * The public vocabulary is the 12 memory-native verbs, mirroring the hosted MCP
- * toolset method-for-method so a developer can move between the two without
+ * The public vocabulary is the memory-native verbs, mirroring the hosted MCP
+ * toolset tool for tool so a developer can move between the two without
  * relearning anything. Every verb maps onto an existing
  * REST endpoint; the SDK adds typing, retries, idempotency and error codes.
  *
- * Four further verbs — {@link Kiomon.createWorkspace},
- * {@link Kiomon.ingestDocument}, {@link Kiomon.listDocuments} and
- * {@link Kiomon.deleteDocument} — exist because the memory verbs alone are not
- * self-sufficient: without them a caller cannot make the workspace
- * `selectWorkspace` needs, or put anything in it for `searchMemory` to find.
- * They are SDK-only; the MCP toolset has no equivalent.
+ * Three further verbs — {@link Kiomon.createWorkspace},
+ * {@link Kiomon.listDocuments} and {@link Kiomon.deleteDocument} — exist because
+ * the fourteen above are not self-sufficient: without them a caller cannot make
+ * the workspace `selectWorkspace` needs, or read the library with the
+ * document-only filters. They have no tool of their own, though
+ * `deleteDocument` is the same operation as `manage_memory`'s `forget`.
  *
  * Failure contract: an invalid *argument* throws synchronously, so a programming
  * error never gets buried in a promise chain. Everything that can fail for
@@ -32,10 +32,12 @@ import type {
 	IngestResult,
 	JsonObject,
 	ListDocumentsArgs,
+	ListMemoriesArgs,
 	ManageAction,
 	ManageMemoryArgs,
 	MemoryDocument,
 	MemoryKind,
+	MemoryList,
 	RecordOutcomeArgs,
 	ReflectLearning,
 	ReflectSessionArgs,
@@ -56,9 +58,12 @@ const MAX_RETRIEVAL_LIMIT = 20;
 const MAX_DOCUMENT_LIMIT = 200;
 
 const MEMORY_KINDS: readonly MemoryKind[] = ["reference", "episodic", "semantic", "procedural"];
-const DOCUMENT_STATUSES = ["all", "active", "archived", "pending_approval"] as const;
+/** The state vocabulary of a listing — shared by documents and memories. */
+const LIST_STATUSES = ["all", "active", "archived", "pending_approval"] as const;
 const DOCUMENT_SORTS = ["recent", "oldest", "recently_read"] as const;
 const INDEX_STATUSES = ["all", "queued", "chunked", "indexed", "ready", "failed"] as const;
+/** Page size for `listMemories` when the caller names none — matches MCP `list_memories`. */
+const DEFAULT_MEMORY_PAGE_SIZE = 50;
 
 const LEARNINGS_KINDS: readonly ReflectLearning["kind"][] = ["semantic", "procedural", "episodic"];
 const MANAGE_ACTIONS: readonly ManageAction[] = [
@@ -168,7 +173,7 @@ export class Kiomon {
 		return this;
 	}
 
-	// ── The 12 memory verbs ────────────────────────────────────────────────────
+	// ── The memory verbs ───────────────────────────────────────────────────────
 
 	/** Hybrid keyword + semantic search over the library. */
 	searchMemory(args: SearchArgs, options?: CallOptions): Promise<SearchResponse> {
@@ -215,7 +220,16 @@ export class Kiomon {
 	exploreMemoryGraph(args: GraphExploreArgs, options?: CallOptions): Promise<GraphResult> {
 		requireId(args?.id, "exploreMemoryGraph");
 		return this.request<GraphResult>("/api/graph", {
-			query: { center_id: args.id, depth: args.depth ?? 1, relation: args.relation },
+			query: {
+				center_id: args.id,
+				depth: args.depth ?? 1,
+				relation: args.relation,
+				// The walk is workspace-scoped on the server, and the default is the
+				// credential's own workspace rather than the selected one — without
+				// this an agent that called selectWorkspace would traverse a
+				// different brain than the one it just read, silently.
+				workspace_id: this.workspaceFor(args.workspace_id),
+			},
 		}, options);
 	}
 
@@ -297,12 +311,7 @@ export class Kiomon {
 		return this.request<{ workspaces: Workspace[] }>("/api/workspaces", {}, options);
 	}
 
-	// ── Workspace and document verbs ───────────────────────────────────────────
-	//
-	// SDK-only: the MCP toolset has no equivalent, and without these the memory
-	// verbs cannot be used from a cold start — a caller could not create the
-	// workspace `selectWorkspace` needs, nor put anything in it for
-	// `searchMemory` to find.
+	// ── Workspaces and documents ───────────────────────────────────────────────
 
 	/**
 	 * Create a workspace, optionally inside an organization.
@@ -401,8 +410,8 @@ export class Kiomon {
 				code: "invalid_request",
 			});
 		}
-		if (args.status !== undefined && !DOCUMENT_STATUSES.includes(args.status)) {
-			throw new KiomonError(`listDocuments: \`status\` must be one of: ${DOCUMENT_STATUSES.join(", ")}.`, {
+		if (args.status !== undefined && !LIST_STATUSES.includes(args.status)) {
+			throw new KiomonError(`listDocuments: \`status\` must be one of: ${LIST_STATUSES.join(", ")}.`, {
 				code: "invalid_request",
 			});
 		}
@@ -444,6 +453,56 @@ export class Kiomon {
 	}
 
 	/**
+	 * List memories and files by state — the listing counterpart to
+	 * `searchMemory`, for questions a query cannot express: what is waiting for
+	 * review, what is live, what was archived, what was saved this week.
+	 *
+	 * `status` defaults to `"pending_approval"`, the **Review Inbox**: drafts the
+	 * write gate held back for a decision. They are not retrievable — nothing is
+	 * until it is approved — so a search that returns nothing is not proof the
+	 * brain is empty. Use `"active"` for live knowledge, `"archived"` for what was
+	 * hidden or quarantined, `"all"` for everything.
+	 *
+	 * Work the inbox with `manageMemory({ id, action: "approve" | "reject" })`.
+	 */
+	listMemories(args: ListMemoriesArgs = {}, options?: CallOptions): Promise<MemoryList> {
+		if (args.limit !== undefined && (args.limit < 1 || args.limit > MAX_DOCUMENT_LIMIT)) {
+			throw new KiomonError(`listMemories: \`limit\` must be between 1 and ${MAX_DOCUMENT_LIMIT}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.offset !== undefined && args.offset < 0) {
+			throw new KiomonError("listMemories: `offset` must be a non-negative integer.", {
+				code: "invalid_request",
+			});
+		}
+		if (args.status !== undefined && !LIST_STATUSES.includes(args.status)) {
+			throw new KiomonError(`listMemories: \`status\` must be one of: ${LIST_STATUSES.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		if (args.kind !== undefined && !MEMORY_KINDS.includes(args.kind)) {
+			throw new KiomonError(`listMemories: \`kind\` must be one of: ${MEMORY_KINDS.join(", ")}.`, {
+				code: "invalid_request",
+			});
+		}
+		return this.request<MemoryList>(
+			"/api/memories",
+			{
+				query: {
+					status: args.status ?? "pending_approval",
+					kind: args.kind,
+					q: args.query,
+					limit: args.limit ?? DEFAULT_MEMORY_PAGE_SIZE,
+					offset: args.offset,
+					workspace_id: this.workspaceFor(args.workspace_id),
+				},
+			},
+			options,
+		);
+	}
+
+	/**
 	 * Delete a document and everything derived from it.
 	 *
 	 * The row, its blob, its chunks, tags, links and both chunk- and
@@ -454,6 +513,8 @@ export class Kiomon {
 		requireId(id, "deleteDocument");
 		return this.request<DeleteResult>(`/api/documents/${encodeURIComponent(id)}`, { method: "DELETE", write: true }, options);
 	}
+
+	// ── Retrieval and the learning loop ────────────────────────────────────────
 
 	/** The most recent proactive briefing for a workspace. */
 	getLatestBriefing(
